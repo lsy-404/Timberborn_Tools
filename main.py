@@ -50,6 +50,8 @@ def parse_args():
                         help="(API mode) Max pages to fetch (default: 10 full, 3 incremental)")
     parser.add_argument("--days", type=int, default=0,
                         help="(Scrape mode) Only include mods updated within N days (0 = use config value)")
+    parser.add_argument("--depth", type=int, default=0,
+                        help="(Scrape mode) Number of Workshop pages to scan (0 = use config value)")
     return parser.parse_args()
 
 
@@ -186,8 +188,9 @@ def main():
             # Original web scraping mode
             logger.info("Step 1: Fetching latest mods via web scraping...")
             days = args.days if args.days > 0 else config["workshop"].get("days", -1)
+            depth = args.depth if args.depth > 0 else config["workshop"]["depth"]
             workshop = WorkshopNewMods(config["workshop"]["game_id"], config["workshop"]["text"])
-            new_mods = workshop.get_mods(config["workshop"]["depth"], days=days)
+            new_mods = workshop.get_mods(depth, days=days)
 
             new_mod_count = 0
             for mod_id in new_mods:
