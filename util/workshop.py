@@ -79,7 +79,10 @@ class WorkshopNewMods:
         """
         def response_to_ids(response: requests.Response) -> None:
             soup = BeautifulSoup(response.content, 'html.parser')
-            mod_elements = soup.find_all('a', {'class': 'ugc'})
+            # Steam Workshop no longer uses class="ugc"; match by href pattern instead
+            mod_elements = soup.find_all(
+                'a', href=lambda h: h and 'filedetails' in h and 'id=' in h
+            )
             for mod in mod_elements:
                 mod_url = mod.get('href')
                 if mod_url and 'id=' in mod_url:
