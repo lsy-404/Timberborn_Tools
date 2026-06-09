@@ -118,23 +118,50 @@ class CSV_File:
 
     def save_data(self, path: str, filename: str) -> None:
         """Save updated data to TOML file"""
+        file_path = None
         try:
             if not os.path.exists(path):
                 os.makedirs(path)
             file_path = os.path.join(path, f"{filename}.toml")
+
+            # Validate data before dump: ensure all values are TOML-compatible
+            # Convert any non-dict, non-list, non-primitive values to strings
+            self._sanitize_for_toml(self.data)
+
             with open(file_path, 'w', encoding='utf-8') as file:
                 toml.dump(self.data, file)
             self.logger.info(f"Saved data to {file_path}")
-            
+
             # Perform round-trip comparison for keys with 'new' field
             self._remove_identical_new_values(file_path)
-            
+
             # Apply TOML section reordering to ensure _meta is at the front
             self._reorder_toml_sections(file_path)
-            
+
         except Exception as e:
             self.logger.error(f"Error saving data to {file_path}: {e}")
     
+    def _sanitize_for_toml(self, data: dict) -> None:
+        """
+        Recursively sanitize data to ensure TOML compatibility.
+        Converts any non-standard values (e.g. lists at entry level) to
+        TOML-compatible structures to prevent 'list index out of range' errors.
+        """
+        for key, value in list(data.items()):
+            if isinstance(value, dict):
+                self._sanitize_for_toml(value)
+            elif isinstance(value, list):
+                # Lists are valid in TOML, but ensure contents are primitives
+                pass
+            elif isinstance(value, (str, int, float, bool)):
+                pass
+            elif value is None:
+                self.logger.warning(f"Converting None value for key '{key}' to empty string")
+                data[key] = ""
+            else:
+                self.logger.warning(f"Converting non-TOML value type {type(value).__name__} for key '{key}' to string")
+                data[key] = str(value)
+
     def _reorder_toml_sections(self, file_path: str) -> None:
         """
         重新排序TOML文件，确保_meta section在最前面

@@ -77,12 +77,17 @@ class Config:
                 "game_id": 0,
                 "text": "Mod",
                 "ids": [],
+                "days": 3,
+                "depth": 2,
+                "api_mode": False,
+                "api_limit": 200,
             },
             "game": {
                 "versions": [],
             },
             "steam": {
                 "username": "",
+                "api_key": "",
             }
         }
 

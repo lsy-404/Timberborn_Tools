@@ -12,11 +12,12 @@ class Git:
     """
     Git class to handle git operations
     """
-    def __init__(self, repo_path: str,branch: str) -> None:
+    def __init__(self, repo_path: str, branch: str) -> None:
         """
         Initialize the Git class with the repository path
         """
         self.repo_path = repo_path
+        self.branch = branch
         self.logger = logging.getLogger(self.__class__.__name__)
 
     def push(self) -> None:
@@ -25,9 +26,19 @@ class Git:
         """
         try:
             self.logger.info("Pushing changes to remote repository")
+
+            # Ensure we're on the correct branch
+            subprocess.run(['git', 'checkout', self.branch], cwd=self.repo_path, check=True)
             subprocess.run(['git', 'add', '.'], cwd=self.repo_path, check=True)
-            subprocess.run(['git', 'commit', '-m', 'Update'], cwd=self.repo_path, check=True)
-            subprocess.run(['git', 'push'], cwd=self.repo_path, check=True)
+
+            # Check if there are changes to commit
+            status = subprocess.run(['git', 'status', '--porcelain'], cwd=self.repo_path, capture_output=True, text=True, check=True)
+            if not status.stdout.strip():
+                self.logger.info("Nothing to commit, working tree clean")
+            else:
+                subprocess.run(['git', 'commit', '-m', 'Update'], cwd=self.repo_path, check=True)
+
+            subprocess.run(['git', 'push', 'origin', self.branch], cwd=self.repo_path, check=True)
             self.logger.info("Changes pushed successfully")
         except subprocess.CalledProcessError as e:
             self.logger.error(f"Error pushing changes: {e}")
@@ -40,7 +51,8 @@ class Git:
         """
         try:
             self.logger.info("Pulling changes from remote repository")
-            subprocess.run(['git', 'pull'], cwd=self.repo_path, check=True)
+            subprocess.run(['git', 'checkout', self.branch], cwd=self.repo_path, check=True)
+            subprocess.run(['git', 'pull', 'origin', self.branch], cwd=self.repo_path, check=True)
             self.logger.info("Changes pulled successfully")
         except subprocess.CalledProcessError as e:
             self.logger.error(f"Error pulling changes: {e}")

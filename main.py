@@ -40,6 +40,16 @@ def parse_args():
                         help="Number of mods per batch download (default: 5)")
     parser.add_argument("--batch-delay", type=int, default=5,
                         help="Minutes to wait between batch downloads (default: 5)")
+    parser.add_argument("--use-api", action="store_true",
+                        help="Use Steam Web API (IPublishedFileService) instead of web scraping")
+    parser.add_argument("--incremental", action="store_true",
+                        help="(API mode) Only fetch newly updated mods not already in config")
+    parser.add_argument("--api-limit", type=int, default=0,
+                        help="(API mode) Max mods to fetch per run (overrides config)")
+    parser.add_argument("--api-max-pages", type=int, default=0,
+                        help="(API mode) Max pages to fetch (default: 10 full, 3 incremental)")
+    parser.add_argument("--days", type=int, default=0,
+                        help="(Scrape mode) Only include mods updated within N days (0 = use config value)")
     return parser.parse_args()
 
 
@@ -95,7 +105,8 @@ def main():
     logger.info("=" * 80)
     logger.info("Timberborn Mod Data Update Tool v3.2")
     logger.info(f"CLI args: fetch={not skip_step(1, args)}, download={not skip_step(2, args)}, "
-                f"start_from={args.start_from or 'N/A'}")
+                f"start_from={args.start_from or 'N/A'}, use_api={args.use_api}, "
+                f"incremental={args.incremental}, days={args.days or config['workshop'].get('days', 'N/A')}")
     logger.info("Single-version tracking with old version key merging")
     logger.info("=" * 80)
 
@@ -108,19 +119,85 @@ def main():
     if skip_step(1, args):
         logger.info("Step 1: SKIPPED (fetching new mods)")
     else:
-        logger.info("Step 1: Fetching latest mods from Steam Workshop...")
-        workshop = WorkshopNewMods(config["workshop"]["game_id"], config["workshop"]["text"])
-        new_mods = workshop.get_mods(config["workshop"]["depth"])
+        use_api = args.use_api or config["workshop"].get("api_mode", False)
+        if use_api:
+            logger.info("Step 1: Fetching mods via Steam Web API (IPublishedFileService)...")
+            api_key = config["steam"].get("api_key", "")
+            if not api_key:
+                logger.error("Steam API key not configured — set [steam].api_key in config.toml")
+                logger.warning("Falling back to web scraping")
+                use_api = False
 
-        new_mod_count = 0
-        for mod_id in new_mods:
-            if mod_id not in config["workshop"]["ids"]:
-                config["workshop"]["ids"].append(mod_id)
-                new_mod_count += 1
-                logger.info(f"New mod found: {mod_id}")
-        logger.info(f"Found {new_mod_count} new mods")
-        if new_mod_count > 0:
-            CONFIG_CHANGED = True
+        if use_api:
+            api = SteamAPIWorkshop(
+                api_key=config["steam"]["api_key"],
+                game_id=config["workshop"]["game_id"],
+                text=config["workshop"]["text"],
+            )
+
+            api_days = args.days if args.days > 0 else config["workshop"].get("days", -1)
+
+            if args.incremental:
+                # Incremental mode: only get newly updated mods
+                api_limit = args.api_limit or config["workshop"].get("api_limit", 200)
+                max_pages = args.api_max_pages or 3
+                logger.info(
+                    f"Incremental mode: fetching up to {api_limit} mods, "
+                    f"max {max_pages} pages, days={api_days}"
+                )
+                new_mod_ids = api.get_incremental_mods(
+                    existing_ids=config["workshop"]["ids"],
+                    max_pages=max_pages,
+                    numperpage=min(api_limit, 100),
+                    days=api_days,
+                )
+            else:
+                # Full fetch mode: get all mods sorted by last update
+                api_limit = args.api_limit or config["workshop"].get("api_limit", 200)
+                max_pages = args.api_max_pages or 10
+                logger.info(
+                    f"Full fetch mode: up to {api_limit} mods, "
+                    f"max {max_pages} pages, days={api_days}"
+                )
+                all_api_ids = api.get_all_mod_ids(
+                    max_pages=max_pages,
+                    numperpage=min(api_limit, 100),
+                    days=api_days,
+                )
+                new_mod_ids = [
+                    mid for mid in all_api_ids
+                    if mid not in config["workshop"]["ids"]
+                ]
+
+            new_mod_count = 0
+            for mod_id in new_mod_ids:
+                if mod_id not in config["workshop"]["ids"]:
+                    config["workshop"]["ids"].append(mod_id)
+                    new_mod_count += 1
+                    logger.info(f"New mod found via API: {mod_id}")
+
+            logger.info(
+                f"API mode: {new_mod_count} new mods found "
+                f"(total tracked: {len(config['workshop']['ids'])})"
+            )
+            if new_mod_count > 0:
+                CONFIG_CHANGED = True
+        else:
+            # Original web scraping mode
+            logger.info("Step 1: Fetching latest mods via web scraping...")
+            days = args.days if args.days > 0 else config["workshop"].get("days", -1)
+            workshop = WorkshopNewMods(config["workshop"]["game_id"], config["workshop"]["text"])
+            new_mods = workshop.get_mods(config["workshop"]["depth"], days=days)
+
+            new_mod_count = 0
+            for mod_id in new_mods:
+                if mod_id not in config["workshop"]["ids"]:
+                    config["workshop"]["ids"].append(mod_id)
+                    new_mod_count += 1
+                    logger.info(f"New mod found: {mod_id}")
+            logger.info(f"Found {new_mod_count} new mods")
+            if new_mod_count > 0:
+                CONFIG_CHANGED = True
 
     # Remove blacklisted mods
     for black_id in config["workshop"]["blacklist_ids"]:
