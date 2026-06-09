@@ -15,25 +15,35 @@ import re
 from collections import OrderedDict
 
 
+# Canonical language code order matching the data repository convention
+CANONICAL_LANG_ORDER = [
+    'enUS', 'zhCN', 'zhTW', 'ruRU', 'jaJP',
+    'frFR', 'deDE', 'plPL', 'ptBR', 'koKR', 'csCZ', 'viVN',
+]
+
+
 def reorder_entry_fields(entry: OrderedDict) -> OrderedDict:
     """
-    Reorder fields in entry to: raw, new, status, then language codes
+    Reorder fields: raw, new, status, then language codes in canonical order, then any remainder.
+    Canonical lang order: enUS zhCN zhTW ruRU jaJP frFR deDE plPL ptBR koKR csCZ viVN
     """
     if not isinstance(entry, dict):
         return entry
-    
+
     ordered = OrderedDict()
-    
-    # Priority order: raw, new, status
+
     for field in ['raw', 'new', 'status']:
         if field in entry:
             ordered[field] = entry[field]
-    
-    # Then all other fields (language codes and others)
+
+    for lang in CANONICAL_LANG_ORDER:
+        if lang in entry:
+            ordered[lang] = entry[lang]
+
     for field, value in entry.items():
-        if field not in ['raw', 'new', 'status']:
+        if field not in ['raw', 'new', 'status'] and field not in CANONICAL_LANG_ORDER:
             ordered[field] = value
-    
+
     return ordered
 
 

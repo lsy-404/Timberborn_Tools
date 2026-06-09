@@ -1,11 +1,49 @@
 """
-version: 1.0.0
+version: 1.1.0
 author: Wuyilingwei
 Get the latest mods from the Steam Workshop
 """
 import logging
 import requests
 from bs4 import BeautifulSoup
+
+
+def get_published_file_details(mod_ids: list, batch_size: int = 100) -> dict:
+    """
+    Batch query ISteamRemoteStorage/GetPublishedFileDetails/v1/ (no API key needed).
+    Returns {mod_id: time_updated} for all mods that responded successfully.
+    """
+    logger = logging.getLogger("get_published_file_details")
+    result = {}
+    total = len(mod_ids)
+
+    for i in range(0, total, batch_size):
+        batch = mod_ids[i:i + batch_size]
+        data = {"itemcount": len(batch)}
+        for j, mod_id in enumerate(batch):
+            data[f"publishedfileids[{j}]"] = mod_id
+        try:
+            resp = requests.post(
+                "https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/",
+                data=data,
+                timeout=30,
+            )
+            if resp.status_code == 200:
+                details = resp.json().get("response", {}).get("publishedfiledetails", [])
+                for item in details:
+                    if item.get("result", 0) != 1:
+                        continue
+                    pid = str(item.get("publishedfileid", ""))
+                    t_updated = item.get("time_updated", 0)
+                    if pid and t_updated:
+                        result[pid] = t_updated
+            else:
+                logger.warning(f"GetPublishedFileDetails HTTP {resp.status_code} on batch {i // batch_size + 1}")
+        except Exception as e:
+            logger.error(f"GetPublishedFileDetails failed on batch {i // batch_size + 1}: {e}")
+
+    logger.info(f"Got update times for {len(result)}/{total} mods")
+    return result
 
 
 class WorkshopNewMods:

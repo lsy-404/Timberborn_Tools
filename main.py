@@ -207,36 +207,59 @@ def main():
 
     logger.info(f"Total mods to process: {len(config['workshop']['ids'])}")
 
-    # Step 2: Download mods using steamcmd with batch processing
+    # Step 2: Download mods (new / missing local files / updated on Steam)
     if skip_step(2, args):
         logger.info("Step 2: SKIPPED (downloading mods)")
     else:
-        logger.info("Step 2: Downloading mods using SteamCMD (batch mode)...")
+        logger.info("Step 2: Checking mods for required downloads (missing + Steam updates)...")
         steamClient = steamdownloader(config["steam"]["username"], os.path.join(workpath, "steamcmd"))
 
-        # Filter out already-downloaded mods
+        # Query Steam for latest update timestamps of all tracked mods (no API key needed)
+        steam_times = get_published_file_details(config["workshop"]["ids"])
+
+        days = args.days if args.days > 0 else config["workshop"].get("days", -1)
+        current_time = time.time()
+
         ids_to_download = []
+        missing_count = 0
+        update_count = 0
+
         for mod_id in config["workshop"]["ids"]:
             mod_path = os.path.join(game_mod_path, mod_id)
             ws_json = os.path.join(mod_path, "workshop_data.json")
             en_csv = os.path.join(mod_path, "Localizations", "enUS.csv")
-            if os.path.exists(ws_json) or os.path.exists(en_csv):
-                logger.debug(f"Mod {mod_id} already downloaded, skipping")
-            else:
+            local_exists = os.path.exists(ws_json) or os.path.exists(en_csv)
+
+            if not local_exists:
+                logger.info(f"Mod {mod_id}: missing local files, queued for download")
                 ids_to_download.append(mod_id)
+                missing_count += 1
+            elif mod_id in steam_times:
+                steam_time = steam_times[mod_id]
+                local_file = ws_json if os.path.exists(ws_json) else en_csv
+                local_mtime = os.path.getmtime(local_file)
+                steam_is_newer = steam_time > local_mtime
+                within_window = days <= 0 or (current_time - steam_time) < days * 86400
+                if steam_is_newer and within_window:
+                    logger.info(f"Mod {mod_id}: Steam update detected, queued for re-download")
+                    ids_to_download.append(mod_id)
+                    update_count += 1
+                else:
+                    logger.debug(f"Mod {mod_id}: up to date, skipping")
+
+        logger.info(f"Download queue: {len(ids_to_download)} mods "
+                    f"({missing_count} missing, {update_count} updated on Steam)")
 
         if ids_to_download:
-            logger.info(f"Need to download {len(ids_to_download)} mods "
-                        f"(out of {len(config['workshop']['ids'])} total)")
             batch_download_with_delay(
                 steamClient,
                 config["workshop"]["game_id"],
                 ids_to_download,
                 batch_size=args.batch_size,
-                delay_minutes=args.batch_delay
+                delay_minutes=args.batch_delay,
             )
         else:
-            logger.info("All mods already downloaded, nothing to do")
+            logger.info("All mods are up to date, nothing to download")
 
     # Step 3: Create ModTarget instances for each mod
     logger.info("Step 3: Creating mod targets...")
