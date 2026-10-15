@@ -112,10 +112,9 @@ def main():
     logger.info("Single-version tracking with old version key merging")
     logger.info("=" * 80)
 
-    # Pull data repository if git enabled
     if config["git"]["enabled"]:
-        logger.info("Step 0: Pulling data repository...")
-        git.pull()
+        logger.info("Step 0: Synchronizing data repository to cloud state...")
+        git.sync()
 
     # Step 1: Fetch new mods from Steam Workshop
     if skip_step(1, args):
@@ -347,7 +346,6 @@ def main():
     # Step 6: Push data repository if git enabled
     if config["git"]["enabled"]:
         logger.info("Step 6: Pushing updated data to repository...")
-        git.pull()
         git.push()
 
     # Summary
