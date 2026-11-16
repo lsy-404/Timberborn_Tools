@@ -1,5 +1,5 @@
 """
-version: 3.3.0
+version: 3.4.0
 author: Wuyilingwei
 Main script for the mod data update tool
 Focus: Fetch new mods, download them, and update TOML data files
@@ -12,6 +12,7 @@ file: 3.0.x
 steamcmd: 1.0.x
 helper: 1.0.x
 mod_state: 1.0.x
+translation_pack: 1.0.x
 mod_target: 3.1.x
 git: 1.0.x
 """
@@ -22,6 +23,7 @@ from util.steamcmd import *
 from util.helper import *
 from util.git import *
 from util.mod_state import *
+from util.translation_pack import load_protected_ids, translation_pack_reason
 from util.mod_target import ModTarget
 from util.reorder import batch_download_with_delay
 import argparse
@@ -107,7 +109,7 @@ def main():
     logger.addHandler(console_handler)
 
     logger.info("=" * 80)
-    logger.info("Timberborn Mod Data Update Tool v3.3")
+    logger.info("Timberborn Mod Data Update Tool v3.4")
     logger.info(f"CLI args: fetch={not skip_step(1, args)}, download={not skip_step(2, args)}, "
                 f"start_from={args.start_from or 'N/A'}, use_api={args.use_api}, "
                 f"incremental={args.incremental}, days={args.days or config['workshop'].get('days', 'N/A')}")
@@ -269,6 +271,7 @@ def main():
     mod_targets = {}
     valid_mod_ids = []
     tracked_ids = set(config["workshop"]["ids"])
+    protected_ids = load_protected_ids(git_path)
     total_ids = len(config["workshop"]["ids"])
 
     for idx, id in enumerate(config["workshop"]["ids"]):
@@ -295,6 +298,16 @@ def main():
 
             if support_versions is None or not support_versions:
                 logger.warning(f"Mod {id} cannot find any translation files")
+                continue
+
+            pack_reason = translation_pack_reason(
+                mod_path, [p for p in support_versions.values() if p], protected_ids)
+            if pack_reason:
+                logger.info(f"Mod {id} ({mod_name}) has nothing to translate: {pack_reason}; blacklisted")
+                config["workshop"]["blacklist_ids"].append(id)
+                stale_data = os.path.join(data_path, f"{id}.toml")
+                if os.path.exists(stale_data):
+                    os.remove(stale_data)
                 continue
 
             mod_target = ModTarget(

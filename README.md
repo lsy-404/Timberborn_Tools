@@ -73,3 +73,7 @@ zhCN = "金属楼梯"
 ### Cache Release
 
 Downloaded mods are cached under `steamcmd/steamapps/workshop/content/<game_id>`. After the TOML data is written, a cached mod is only needed again when Steam publishes an update. Directories whose last Steam update is older than `cache_release_days` (default 30, set under `[workshop]`; `0` disables) are deleted at the end of each run. Released mods stay tracked and are downloaded again only when Steam reports a newer update. Per-mod state (`time_updated`, `released`) is kept in `mod_state.json` in the working directory. With `--skip-download` only the recorded state is used, and mods without a record are never released.
+
+### Translation Packs
+
+Mods that only translate other content are recognised when their files are read and are added to `blacklist_ids` automatically: either at least half of their string IDs are built-in game IDs (language packs for the base game), or another language has at least five times as many rows as `enUS` (packs for other mods). Their data file is removed.
