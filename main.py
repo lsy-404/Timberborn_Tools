@@ -246,6 +246,7 @@ def main():
                     f"({missing_count} missing, {update_count} updated on Steam)")
 
         if ids_to_download:
+            download_started = time.time()
             batch_download_with_delay(
                 steamClient,
                 config["workshop"]["game_id"],
@@ -253,7 +254,13 @@ def main():
                 batch_size=args.batch_size,
                 delay_minutes=args.batch_delay,
             )
-            downloaded = set(ids_to_download)
+            # A failed download leaves the old files in place, so it is retried next run
+            for mod_id in ids_to_download:
+                f = local_file(os.path.join(game_mod_path, mod_id))
+                if f and os.path.getmtime(f) >= download_started:
+                    downloaded.add(mod_id)
+                    state[mod_id] = {"time_updated": int(steam_times.get(mod_id, download_started)),
+                                     "released": False}
         else:
             logger.info("All mods are up to date, nothing to download")
 
@@ -333,9 +340,6 @@ def main():
             mod_target.save_all_data(data_path)
 
             processed_count += 1
-            if mod_id in downloaded:
-                state[mod_id] = {"time_updated": int(steam_times.get(mod_id, time.time())),
-                                 "released": False}
         except Exception as e:
             logger.error(f"Error processing mod {mod_id}: {e}")
             error_count += 1
