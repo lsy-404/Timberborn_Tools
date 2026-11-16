@@ -5,3 +5,4 @@ config.toml
 /git
 test*.*
 log.txt
+mod_state.json

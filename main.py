@@ -1,5 +1,5 @@
 """
-version: 3.2.0
+version: 3.3.0
 author: Wuyilingwei
 Main script for the mod data update tool
 Focus: Fetch new mods, download them, and update TOML data files
@@ -11,6 +11,7 @@ config: 1.0.x
 file: 3.0.x
 steamcmd: 1.0.x
 helper: 1.0.x
+mod_state: 1.0.x
 mod_target: 3.1.x
 git: 1.0.x
 """
@@ -20,6 +21,7 @@ from util.file import *
 from util.steamcmd import *
 from util.helper import *
 from util.git import *
+from util.mod_state import *
 from util.mod_target import ModTarget
 from util.reorder import batch_download_with_delay
 import argparse
@@ -105,7 +107,7 @@ def main():
     logger.addHandler(console_handler)
 
     logger.info("=" * 80)
-    logger.info("Timberborn Mod Data Update Tool v3.2")
+    logger.info("Timberborn Mod Data Update Tool v3.3")
     logger.info(f"CLI args: fetch={not skip_step(1, args)}, download={not skip_step(2, args)}, "
                 f"start_from={args.start_from or 'N/A'}, use_api={args.use_api}, "
                 f"incremental={args.incremental}, days={args.days or config['workshop'].get('days', 'N/A')}")
@@ -209,6 +211,11 @@ def main():
 
     logger.info(f"Total mods to process: {len(config['workshop']['ids'])}")
 
+    state_path = os.path.join(workpath, "mod_state.json")
+    state = load_state(state_path)
+    steam_times = {}
+    downloaded = set()
+
     # Step 2: Download mods (new / missing local files / updated on Steam)
     if skip_step(2, args):
         logger.info("Step 2: SKIPPED (downloading mods)")
@@ -220,34 +227,20 @@ def main():
         steam_times = get_published_file_details(config["workshop"]["ids"])
 
         days = args.days if args.days > 0 else config["workshop"].get("days", -1)
-        current_time = time.time()
 
-        ids_to_download = []
-        missing_count = 0
-        update_count = 0
+        cache_ids = os.listdir(game_mod_path) if os.path.isdir(game_mod_path) else []
+        bootstrap_state(state, lambda m: os.path.join(game_mod_path, m),
+                        list(config["workshop"]["ids"]) + cache_ids)
+        local_ids = {m for m in config["workshop"]["ids"]
+                     if local_file(os.path.join(game_mod_path, m))}
 
-        for mod_id in config["workshop"]["ids"]:
-            mod_path = os.path.join(game_mod_path, mod_id)
-            ws_json = os.path.join(mod_path, "workshop_data.json")
-            en_csv = os.path.join(mod_path, "Localizations", "enUS.csv")
-            local_exists = os.path.exists(ws_json) or os.path.exists(en_csv)
-
-            if not local_exists:
-                logger.info(f"Mod {mod_id}: missing local files, queued for download")
-                ids_to_download.append(mod_id)
-                missing_count += 1
-            elif mod_id in steam_times:
-                steam_time = steam_times[mod_id]
-                local_file = ws_json if os.path.exists(ws_json) else en_csv
-                local_mtime = os.path.getmtime(local_file)
-                steam_is_newer = steam_time > local_mtime
-                within_window = days <= 0 or (current_time - steam_time) < days * 86400
-                if steam_is_newer and within_window:
-                    logger.info(f"Mod {mod_id}: Steam update detected, queued for re-download")
-                    ids_to_download.append(mod_id)
-                    update_count += 1
-                else:
-                    logger.debug(f"Mod {mod_id}: up to date, skipping")
+        queue = select_downloads(config["workshop"]["ids"], local_ids, state,
+                                 steam_times, time.time(), days)
+        ids_to_download = [m for m, _ in queue]
+        missing_count = sum(1 for _, r in queue if r == "missing")
+        update_count = len(queue) - missing_count
+        for mod_id, reason in queue:
+            logger.info(f"Mod {mod_id}: {reason}, queued for download")
 
         logger.info(f"Download queue: {len(ids_to_download)} mods "
                     f"({missing_count} missing, {update_count} updated on Steam)")
@@ -260,6 +253,7 @@ def main():
                 batch_size=args.batch_size,
                 delay_minutes=args.batch_delay,
             )
+            downloaded = set(ids_to_download)
         else:
             logger.info("All mods are up to date, nothing to download")
 
@@ -267,6 +261,7 @@ def main():
     logger.info("Step 3: Creating mod targets...")
     mod_targets = {}
     valid_mod_ids = []
+    tracked_ids = set(config["workshop"]["ids"])
     total_ids = len(config["workshop"]["ids"])
 
     for idx, id in enumerate(config["workshop"]["ids"]):
@@ -277,6 +272,10 @@ def main():
 
             # Skip mods that don't exist on disk (never downloaded)
             if not os.path.exists(mod_path):
+                if state.get(id, {}).get("released"):
+                    logger.debug(f"Mod {id} cache released, keeping it tracked")
+                    valid_mod_ids.append(id)
+                    continue
                 logger.warning(f"Mod {id} directory not found, skipping")
                 continue
 
@@ -320,6 +319,7 @@ def main():
     logger.info("Step 4: Updating TOML data files...")
     processed_count = 0
     error_count = 0
+    errored_ids = set()
     step4_total = len(mod_targets)
 
     for idx, (mod_id, mod_target) in enumerate(mod_targets.items()):
@@ -333,15 +333,34 @@ def main():
             mod_target.save_all_data(data_path)
 
             processed_count += 1
+            if mod_id in downloaded:
+                state[mod_id] = {"time_updated": int(steam_times.get(mod_id, time.time())),
+                                 "released": False}
         except Exception as e:
             logger.error(f"Error processing mod {mod_id}: {e}")
             error_count += 1
+            errored_ids.add(mod_id)
 
     logger.info(f"Step 4 complete: {processed_count} processed, {error_count} errors")
+
+    # Release stale mod cache
+    release_days = config["workshop"].get("cache_release_days", 30)
+    if release_days > 0:
+        logger.info(f"Releasing cached mods not updated on Steam for over {release_days} days...")
+        cache_ids = os.listdir(game_mod_path) if os.path.isdir(game_mod_path) else []
+        data_ok = {m for m in tracked_ids
+                   if m not in errored_ids and os.path.exists(os.path.join(data_path, f"{m}.toml"))}
+        to_release = select_releases(cache_ids, state, steam_times, tracked_ids, data_ok,
+                                     downloaded, time.time(), release_days)
+        released_count, freed_bytes = release_mods(game_mod_path, to_release, state)
+        logger.info(f"Cache release: {released_count} mods released, "
+                    f"{freed_bytes / 1024 ** 2:.1f} MiB freed")
+        save_state(state_path, state)
 
     # Step 5: Save configuration
     logger.info("Step 5: Saving configuration...")
     config.save_config()
+    save_state(state_path, state)
 
     # Step 6: Push data repository if git enabled
     if config["git"]["enabled"]:
